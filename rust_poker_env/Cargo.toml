@@ -10,7 +10,7 @@ crate-type = ["cdylib"]
 [dependencies]
 pyo3 = { version = "0.21", features = ["extension-module"] }
 rand = "0.8"
-poker = "0.6"
+rs_poker = "4.0.0"
 
 [package.metadata.maturin]
 name = "rust_poker_env"

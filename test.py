@@ -21,7 +21,7 @@ class DummyAgent:
 
 agents = [DummyAgent() for _ in range(8)]
 env = PokerEnv(agents, small_blind=10, big_blind=20, initial_stack=100)
-env.play_game(verbose=False, episode=100000)
+env.play_game(verbose=True, episode=2)
 
 end = time.time()
 print(f"Durée d'exécution : {end - start} secondes")

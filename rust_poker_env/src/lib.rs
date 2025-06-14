@@ -3,7 +3,7 @@ use rand::seq::SliceRandom;
 use rand::thread_rng;
 use pyo3::types::{PyDict, PyTuple};
 use pyo3::ToPyObject;
-use poker::{Card, Evaluator, box_cards, Eval};
+use rs_poker::core::{Hand, Rankable, Rank};
 
 // Assuming Action and Phase enums are already defined as in the previous response
 #[derive(Debug, Clone, PartialEq)]
@@ -91,11 +91,11 @@ pub struct PokerEnv {
     #[pyo3(get, set)]
     current_player: usize,
     #[pyo3(get, set)]
-    deck: Vec<(String, String)>,
+    deck: Vec<String>,
     #[pyo3(get, set)]
-    player_cards: Vec<Vec<(String, String)>>,
+    player_cards: Vec<Vec<String>>,
     #[pyo3(get, set)]
-    community_cards: Vec<(String, String)>,
+    community_cards: Vec<String>,
 }
 
 #[pymethods]
@@ -154,8 +154,8 @@ impl PokerEnv {
         let suits = vec!["h", "d", "c", "s"];
         self.deck = ranks
             .iter()
-            .flat_map(|&rank| suits.iter().map(move |&suit| (rank.to_string(), suit.to_string())))
-            .collect();
+            .flat_map(|&rank| suits.iter().map(move |&suit| format!("{}{}", rank, suit)))
+            .collect::<Vec<String>>();
         self.deck.shuffle(&mut thread_rng());
 
         // Distribute private cards
@@ -391,7 +391,7 @@ impl PokerEnv {
     /// Determine winner(s) and conclude a game
     pub fn resolution(&mut self, verbose: bool) -> PyResult<()> {
         let mut winners: Vec<String> = Vec::new();
-        let mut scores: Vec<(String, Eval)> = Vec::new();
+        let mut scores: Vec<(String, Rank)> = Vec::new();
 
         // Check if only one player hasn't folded
         if self.folded.iter().filter(|&&b| b).count() == self.num_players - 1 {
@@ -400,30 +400,20 @@ impl PokerEnv {
             }
         } else {
 
-            let format_card = |cards: Vec<(String, String)>| -> Vec<Card> {
-                cards.into_iter()
-                    .map(|c| Card::try_from_chars(
-                            c.0.chars().next().unwrap(),
-                            c.1.chars().next().unwrap()
-                        ).unwrap())
-                    .collect()
-            };
-
-            let board = format_card(self.community_cards.clone());
-            let eval = Evaluator::new();
+            let board = self.community_cards.join("");
 
             for i in 0..self.num_players {
-                let hand = format_card(self.player_cards[i].clone());
-                let all_card = box_cards!(hand, board);
-                let score = eval.evaluate(all_card).expect("couldn't evaluate hand");
-                scores.push((self.names[i].clone(), score));
+                let player_cards = self.player_cards[i].clone().join("");
+                let hand = Hand::new_from_str(&format!("{}{}", board, player_cards)).unwrap();
+                let rank = hand.rank();
+                scores.push((self.names[i].clone(), rank));
             }
 
             scores.sort_by_key(|x| x.1);
             winners.push(scores[0].0.clone());
 
             let min_score = scores[0].1;
-            for i in 0..self.num_players {
+            for i in 1..self.num_players {
                 if scores[i].1 == min_score {
                     winners.push(scores[i].0.clone());
                 } else {
@@ -434,8 +424,13 @@ impl PokerEnv {
 
         // Distribute the pot
         self.current_pot += self.bets.iter().sum::<i32>();
+        println!("{:?}", self.current_pot);
         let takes = self.current_pot / (winners.len() as i32);
+        println!("{:?}", winners);
+        println!("{:?}", winners.len());
+        println!("{:?}", takes);
         self.current_pot = self.current_pot % (winners.len() as i32);
+        println!("{:?}", self.current_pot);
 
         let mut i = 0;
         while i < self.num_players {
