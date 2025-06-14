@@ -424,13 +424,8 @@ impl PokerEnv {
 
         // Distribute the pot
         self.current_pot += self.bets.iter().sum::<i32>();
-        println!("{:?}", self.current_pot);
         let takes = self.current_pot / (winners.len() as i32);
-        println!("{:?}", winners);
-        println!("{:?}", winners.len());
-        println!("{:?}", takes);
         self.current_pot = self.current_pot % (winners.len() as i32);
-        println!("{:?}", self.current_pot);
 
         let mut i = 0;
         while i < self.num_players {
