@@ -4,8 +4,8 @@ use rand::thread_rng;
 use pyo3::types::{PyDict, PyTuple};
 use pyo3::ToPyObject;
 use rs_poker::core::{Hand, Rankable, Rank};
+use std::cmp::Reverse;
 
-// Assuming Action and Phase enums are already defined as in the previous response
 #[derive(Debug, Clone, PartialEq)]
 #[pyclass]
 pub enum Action {
@@ -41,6 +41,8 @@ pub enum Phase {
     Turn,
     #[pyo3(name = "RIVER")]
     River,
+    #[pyo3(name = "SHOWDOWN")]
+    Showdown,
 }
 
 impl ToPyObject for Phase {
@@ -50,6 +52,7 @@ impl ToPyObject for Phase {
             Phase::Flop => "flop".to_object(py),
             Phase::Turn => "turn".to_object(py),
             Phase::River => "river".to_object(py),
+            Phase::Showdown => "showdown".to_object(py),
         }
     }
 }
@@ -71,13 +74,13 @@ pub struct PokerEnv {
     #[pyo3(get)]
     big_blind: i32,
     #[pyo3(get)]
+    max_raise: i32,
+    #[pyo3(get)]
     initial_stack: i32,
     #[pyo3(get, set)]
     stacks: Vec<i32>,
     #[pyo3(get, set)]
     dealer_pos: usize,
-    #[pyo3(get, set)]
-    current_pot: i32,
     #[pyo3(get, set)]
     bets: Vec<i32>,
     #[pyo3(get, set)]
@@ -101,7 +104,7 @@ pub struct PokerEnv {
 #[pymethods]
 impl PokerEnv {
     #[new]
-    /// init poker env
+    /// Init poker env
     pub fn new(
         _py: Python,
         agents: Vec<PyObject>,
@@ -118,10 +121,10 @@ impl PokerEnv {
             dead_names: Vec::new(),
             small_blind,
             big_blind,
+            max_raise: 0,
             initial_stack,
             stacks: vec![initial_stack; num_players],
             dealer_pos: 0,
-            current_pot: 0,
             bets: vec![0; num_players],
             folded: vec![false; num_players],
             all_in: vec![false; num_players],
@@ -140,7 +143,6 @@ impl PokerEnv {
     /// Reset the env for a new round
     pub fn reset(&mut self) -> PyResult<()> {
         // Reset game state
-        self.current_pot = 0;
         self.bets = vec![0; self.num_players];
         self.folded = vec![false; self.num_players];
         self.all_in = vec![false; self.num_players];
@@ -176,6 +178,8 @@ impl PokerEnv {
         self.apply_bet(sb_pos, self.small_blind.min(self.stacks[sb_pos]))?;
         self.apply_bet(bb_pos, self.big_blind.min(self.stacks[bb_pos]))?;
 
+        self.max_raise = self.bets.iter().max().copied().unwrap_or(0);
+
         Ok(())
     }
 
@@ -192,6 +196,7 @@ impl PokerEnv {
     pub fn get_available_actions(&mut self) -> PyResult<Vec<Py<PyTuple>>> {
         let mut actions: Vec<Py<PyTuple>> = Vec::new();
         let current_bet = self.bets[self.current_player];
+        let current_stack = self.stacks[self.current_player];
         let max_bet = self.bets.iter().max().copied().unwrap_or(0);
 
         // No action if all in
@@ -199,12 +204,17 @@ impl PokerEnv {
             return Ok(actions);
         };
 
+        // Always fold
+        Python::with_gil(|py| {
+            actions.push(PyTuple::new_bound(py, [Action::Fold.to_object(py)]).into());
+        });
+
         let sum_all_in: usize = self.all_in.iter().map(|&b| b as usize).sum();
         let sum_folded: usize = self.folded.iter().map(|&b| b as usize).sum();
 
         if sum_all_in + sum_folded == self.folded.len() - 1 {
             if current_bet != max_bet {
-                let call_amount = max_bet.min(self.stacks[self.current_player]);
+                let call_amount = max_bet.min(current_stack);
                 Python::with_gil(|py| {
                     actions.push(PyTuple::new_bound(py, [Action::Call.to_object(py), call_amount.to_object(py)]).into());
                 });
@@ -212,25 +222,25 @@ impl PokerEnv {
             return Ok(actions)
         };
 
-        // Always fold
-        Python::with_gil(|py| {
-            actions.push(PyTuple::new_bound(py, [Action::Fold.to_object(py)]).into());
-        });
-
         // "Check" is the bet of the player is equal to the max_bet, "Call" if not
         if current_bet == max_bet {
             Python::with_gil(|py| {
                 actions.push(PyTuple::new_bound(py, [Action::Check.to_object(py)]).into());
             });
         } else {
-            let call_amount = max_bet.min(self.stacks[self.current_player]);
+            let call_amount = max_bet.min(current_stack);
             Python::with_gil(|py| {
                 actions.push(PyTuple::new_bound(py, [Action::Call.to_object(py), call_amount.to_object(py)]).into());
             });
         };
 
-        if self.stacks[self.current_player] >= max_bet*2 {
-            let raise_range = (max_bet * 2, self.stacks[self.current_player]);
+        if current_stack > max_bet {
+            let raise_range: (i32, i32);
+            if current_stack >= max_bet*2 {
+                raise_range = (max_bet + self.max_raise, current_stack);
+            } else {
+                raise_range = (current_stack, current_stack);
+            }
             Python::with_gil(|py| {
                 actions.push(PyTuple::new_bound(py, [Action::Raise.to_object(py), raise_range.to_object(py)]).into());
             });
@@ -247,7 +257,6 @@ impl PokerEnv {
             dict.set_item("community_cards", self.community_cards.clone())?;
             dict.set_item("stacks", self.stacks.clone())?;
             dict.set_item("bets", self.bets.clone())?;
-            dict.set_item("pot", self.current_pot)?;
             dict.set_item("phase", &self.current_phase)?;
             dict.set_item("current_player", self.current_player)?;
             dict.set_item("folded", self.folded.clone())?;
@@ -258,15 +267,14 @@ impl PokerEnv {
 
     /// Print overall state
     pub fn overall_state(&mut self) -> PyResult<()> {
-        println!("phase: {0:?}\nplayers_cards: {1:?}\ncommunity_cards: {2:?}\nfolded: {3:?}')\nall_in: {4:?}\nstacks: {5:?}\nbets: {6:?}\npot: {7}\n",
+        println!("phase: {0:?}\nplayers_cards: {1:?}\ncommunity_cards: {2:?}\nfolded: {3:?}')\nall_in: {4:?}\nstacks: {5:?}\nbets: {6:?}\n",
                     self.current_phase,
                     self.player_cards,
                     self.community_cards,
                     self.folded,
                     self.all_in,
                     self.stacks,
-                    self.bets,
-                    self.current_pot);
+                    self.bets);
         Ok(())
     }
 
@@ -285,6 +293,10 @@ impl PokerEnv {
             let agent = self.agents[self.current_player].clone();
             let state = self.get_state()?;
             let available_actions = self.get_available_actions()?;
+
+            if available_actions.len() == 1 {
+                break;
+            }
 
             if !available_actions.is_empty() {
                 // Call agent's choose_action method
@@ -319,6 +331,10 @@ impl PokerEnv {
                         let amount = Python::with_gil(|py| {
                             action.bind(py).get_item(1)?.extract::<i32>()
                         })?;
+                        let raise_amount = amount - self.bets.iter().max().copied().unwrap_or(0);
+                        if raise_amount > self.max_raise {
+                            self.max_raise = raise_amount;
+                        }
                         self.apply_bet(self.current_player, amount)?;
                         last_bet = (self.current_player + self.num_players - 1) % self.num_players;
                     }
@@ -330,9 +346,13 @@ impl PokerEnv {
                 }
             }
 
-            if self.folded.iter().filter(|&&b| b).count() == self.num_players - 1 {
+            let sum_all_in: usize = self.all_in.iter().map(|&b| b as usize).sum();
+            let sum_folded: usize = self.folded.iter().map(|&b| b as usize).sum();
+
+            if sum_all_in + sum_folded == self.folded.len() - 1 {
                 break;
             }
+
 
             if last_bet == self.current_player {
                 break;
@@ -352,20 +372,26 @@ impl PokerEnv {
 
         match self.current_phase {
             Phase::Preflop => {
+                self.current_player = (self.dealer_pos + 1) % self.num_players;
                 self.community_cards = (0..3)
                     .map(|_| self.deck.pop().ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>("Deck is empty")))
                     .collect::<PyResult<Vec<_>>>()?;
                 self.current_phase = Phase::Flop;
             }
             Phase::Flop => {
+                self.current_player = (self.dealer_pos + 1) % self.num_players;
                 let card = self.deck.pop().ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>("Deck is empty"))?;
                 self.community_cards.push(card);
                 self.current_phase = Phase::Turn;
             }
             Phase::Turn => {
+                self.current_player = (self.dealer_pos + 1) % self.num_players;
                 let card = self.deck.pop().ok_or_else(|| PyErr::new::<pyo3::exceptions::PyValueError, _>("Deck is empty"))?;
                 self.community_cards.push(card);
                 self.current_phase = Phase::River;
+            }
+            Phase::River => {
+                self.current_phase = Phase::Showdown;
             }
             _ => {
                 return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>("Error of phase"));
@@ -384,74 +410,148 @@ impl PokerEnv {
         self.folded.remove(player);
         self.all_in.remove(player);
         self.rewards.remove(player);
+        self.player_cards.remove(player);
         self.num_players -= 1;
         Ok(())
     }
 
     /// Determine winner(s) and conclude a game
     pub fn resolution(&mut self, verbose: bool) -> PyResult<()> {
-        let mut winners: Vec<String> = Vec::new();
         let mut scores: Vec<(String, Rank)> = Vec::new();
+        let stacks_before_resolution = self.stacks.iter().sum::<i32>();
 
-        // Check if only one player hasn't folded
-        if self.folded.iter().filter(|&&b| b).count() == self.num_players - 1 {
-            if let Some(index) = self.folded.iter().position(|&b| !b) {
-                winners.push(self.names[index].clone());
-            }
-        } else {
+        let board = self.community_cards.join("");
 
-            let board = self.community_cards.join("");
-
-            for i in 0..self.num_players {
+        for i in 0..self.num_players {
+            if !self.folded[i] {
                 let player_cards = self.player_cards[i].clone().join("");
                 let hand = Hand::new_from_str(&format!("{}{}", board, player_cards)).unwrap();
                 let rank = hand.rank();
                 scores.push((self.names[i].clone(), rank));
             }
+        }
 
-            scores.sort_by_key(|x| x.1);
-            winners.push(scores[0].0.clone());
+        scores.sort_by_key(|x| Reverse(x.1));
 
-            let min_score = scores[0].1;
-            for i in 1..self.num_players {
-                if scores[i].1 == min_score {
-                    winners.push(scores[i].0.clone());
+        let mut pots = vec![0];
+        let mut pots_names: Vec<Vec<String>> = vec![vec![]];
+
+        let sum_all_in: usize = self.all_in.iter().map(|&b| b as usize).sum();
+        if sum_all_in == 0 {
+            for i in 0..self.num_players {
+                pots[0] += self.bets[i];
+
+                if !self.folded[i] {
+                    pots_names[0].push(self.names[i].clone())
+                }
+            }
+        } else {
+            let mut pot_index = 0;
+            let mut bets = self.bets.clone();
+
+            loop {
+                let min = bets.iter()
+                    .zip(self.folded.iter())
+                    .enumerate()
+                    .filter_map(|(_i, (&num, &flag))| {
+                        if num != 0 && !flag {
+                            Some(num)
+                        } else {
+                            None
+                        }
+                    })
+                    .min();
+
+                if let Some(val) = min {
+                    for i in 0..self.num_players {
+                        let n = std::cmp::min(val, bets[i]);
+                        if n != 0 {
+                            bets[i] -= n;
+                            pots[pot_index] += n;
+
+                            if !self.folded[i] {
+                                pots_names[pot_index].push(self.names[i].clone());
+                            }
+                        }
+                    }
+                    pots.push(0);
+                    pots_names.push(Vec::new());
+                    pot_index += 1;
                 } else {
                     break;
                 }
             }
         }
 
-        // Distribute the pot
-        self.current_pot += self.bets.iter().sum::<i32>();
-        let takes = self.current_pot / (winners.len() as i32);
-        self.current_pot = self.current_pot % (winners.len() as i32);
+        if verbose {
+            println!("pots: {:?}\npots_player: {:?}", pots, pots_names);
+        }
 
+        // Distribute the pots
+        let mut rest = 0;
         let mut i = 0;
-        while i < self.num_players {
-            let agent_name = self.names[i].clone();
-            if winners.contains(&agent_name) {
-                self.stacks[i] += takes;
-                self.stacks[i] -= self.bets[i];
-                if verbose {
-                    println!("Winner: {}", agent_name);
-                }
-            } else {
-                self.stacks[i] -= self.bets[i];
-                if self.stacks[i] == 0 {
-                    if verbose {
-                        println!("{} lost", agent_name);
+        for p in pots {
+
+            if p == 0 {
+                continue;
+            }
+
+            // Determine pot winner(s)
+            let mut winners = Vec::new();
+            let mut rank: Option<Rank> = None;
+            for (name, r) in scores.clone() {
+                if pots_names[i].contains(&name) {
+                    if winners.len() == 0 {
+                        winners.push(name);
+                        rank = Some(r);
+                    } else {
+                        if Some(r) == rank {
+                            winners.push(name);
+                        } else {
+                            break;
+                        }
                     }
-                    self.kill(i)?;
-                    i = i.saturating_sub(1);
                 }
             }
+
+            // Distribute gains
+            rest += p % (winners.len() as i32);
+            let takes = p / (winners.len() as i32);
+
+            for j in 0..self.num_players {
+                let agent_name = self.names[j as usize].clone();
+                if winners.contains(&agent_name) {
+                    self.stacks[j as usize] += takes;
+                    if verbose {
+                        println!("Winner pot {}: {}", i, agent_name);
+                    }
+                }
+            }
+
             i += 1;
+        }
+
+        let mut j: i32 = 0;
+        while (j as usize) < self.num_players {
+            let agent_name = self.names[j as usize].clone();
+            self.stacks[j as usize] -= self.bets[j as usize];
+            if self.stacks[j as usize] == 0 {
+                if verbose {
+                    println!("{} lost", agent_name);
+                }
+                self.kill(j as usize)?;
+                j -= 1;
+            }
+            j += 1;
         }
 
         if verbose {
             println!("State of stacks: {:?}", self.stacks);
             println!("{} player remaining", self.num_players);
+        }
+
+        if self.stacks.iter().sum::<i32>() + rest != stacks_before_resolution {
+            panic!("Number of stack is not correct anymore!");
         }
 
         Ok(())
@@ -501,7 +601,7 @@ impl PokerEnv {
                     }
                     self.advance_phase(verbose)?;
 
-                    if self.current_phase == Phase::River {
+                    if self.current_phase == Phase::Showdown {
                         if verbose {
                             println!();
                             self.overall_state()?;
