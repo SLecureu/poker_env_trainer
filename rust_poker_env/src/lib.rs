@@ -346,13 +346,10 @@ impl PokerEnv {
                 }
             }
 
-            let sum_all_in: usize = self.all_in.iter().map(|&b| b as usize).sum();
             let sum_folded: usize = self.folded.iter().map(|&b| b as usize).sum();
-
-            if sum_all_in + sum_folded == self.folded.len() - 1 {
+            if sum_folded == self.folded.len() - 1 {
                 break;
             }
-
 
             if last_bet == self.current_player {
                 break;
