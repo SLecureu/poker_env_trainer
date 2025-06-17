@@ -9,7 +9,7 @@ pip install -r requirements.txt
 ```
 
 ```bash
-source .fishking/bin/activate
+source .venv/bin/activate
 ```
 
 ## ADDING / REMOVING A PACKAGE
