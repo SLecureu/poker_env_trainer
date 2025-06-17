@@ -1,6 +1,6 @@
-## ACTIVER L'ENVIRONNEMENT VIRTUEL
+## ACTIVATE THE VIRTUAL ENVIRONMENT
 
-Conseillé: faire tourner le tout dans un environement virtuel:
+Recommended: Run everything inside a virtual environment:
 
 ```bash
 python3 -m venv .venv
@@ -12,49 +12,49 @@ pip install -r requirements.txt
 source .fishking/bin/activate
 ```
 
-## RAJOUTER / RETIRER UN PACKAGE
+## ADDING / REMOVING A PACKAGE
 
-Si on veut changer des packages voici comment faire:
+If you want to modify the packages, here’s how to do it:
 
-ajouter / retirer à requirements.in le package si il ne fait pas partie de la bibliothèque standard
+Add or remove the package in requirements.in if it’s not part of the standard library.
 
-exécuter:
+Then run:
 
 ```bash
 pip-compile requirements.in
 ```
 
-Cela peut prendre plusieurs minutes. Cela créra une fichier requirements.txt avec toutes les dépendances et les packages.
+This may take several minutes. It will generate a requirements.txt file containing all dependencies and packages.
 
-## INSTALLER / DÉSINSTALLER LES PACKAGES / DÉPENDANCES
+## INSTALLING / UNINSTALLING PACKAGES / DEPENDENCIES
 
-Voici les commandes pour installer / désintaller tous les packages et dépendances:
+Here are the commands to install or uninstall all packages and dependencies:
 
--Tout désinstaller
+-Uninstall everything
 
 ```bash
 pip freeze | grep -v '@' | xargs pip uninstall -y
 ```
 
--   TOUT INSTALLER
+-Install everything
 
 ```bash
 pip install -r requirements.txt
 ```
 
-## COMPILER LE MODULE RUST
+## COMPILE THE RUST MODULE
 
 ```bash
 maturin develop
 ```
 
-Attention, la bibliothèque utiliser "rs_poker" utilise rust nighty, il faut run:
+Note: The library "rs_poker" uses Rust nightly, so you need to run:
 
 ```bash
 rustup override set nightly
 ```
 
-Run ceci si rust nighty n'est pas installé:
+Run this if Rust nightly is not installed:
 
 ```bash
 rustup toolchain install nightly
